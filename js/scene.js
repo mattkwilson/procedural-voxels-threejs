@@ -21,15 +21,18 @@ scene.add(ambientLight);
 const light = new THREE.PointLight(0xffffff);
 scene.add(light);
 
+scene.add(new THREE.AxesHelper(3));
+
 // -----------------------MATERIALS--------------------------
 
 const blockMaterial = new THREE.MeshLambertMaterial({vertexColors:true});
 
 // --------------PROCEDURAL VOXEL GENERATION-----------------
 // mesh info
-const verticesPerUnit = 4;
+const facesPerUnit = 2;
+const verticesPerFace = 3;
 const numDimensions = 3;
-const itemSizePerUnit = verticesPerUnit * numDimensions;
+const itemSizePerUnit = facesPerUnit * verticesPerFace * numDimensions;
 
 // terrain info
 const noise = new perlinNoise3d();
@@ -46,7 +49,6 @@ const smoothness = 8;
 // --------------------
 
 const chunkPool = [];
-var chunkReferencePos = new THREE.Vector3(0,0,0);
 
 // Generate the chunks
 for(let i = 0; i < numberChunksXZ; i++) {
@@ -74,17 +76,17 @@ function buildChunkMesh(mesh) {
     const normals = new Float32Array(maxItemSize);
     const colors = new Float32Array(maxItemSize);
     
-    var x = chunkReferencePos.x + mesh.position.x;
-    var y = 0;
-    var z = chunkReferencePos.z + mesh.position.z;
+    var x = mesh.position.x;
+    var z = mesh.position.z;
     
-    const vertices = new THREE.Vector3[numUnits + chunkSize * 2 + 1];
+    const vertices = []; // [numUnits + chunkSize * 2 + 1]
     // Use perlin noise to generate vertex positions
     for(let i = 0; i <= chunkSize; i++) {
       for(let k = 0; k <= chunkSize; k++) {
-        var height = getNoise(x + i,0, z + k, smoothness / 4.0, scale / 4.0);
-        height += getNoise(x + i,0, z + k, smoothness / 2.0, scale / 2.0);
-        height += getNoise(x + i,0, z + k, smoothness, scale);
+        // var height = getNoise(x + i,0, z + k, smoothness / 4.0, scale / 4.0);
+        // height += getNoise(x + i,0, z + k, smoothness / 2.0, scale / 2.0);
+        // height += getNoise(x + i,0, z + k, smoothness, scale);
+        var height = getNoise(x + i,0, z + k, 10, 10);
         vertices.push(new THREE.Vector3(i, height, k));
       }
     }
@@ -93,11 +95,11 @@ function buildChunkMesh(mesh) {
     var itemCount = 0;
     for(let i = 0; i < chunkSize; i++) {
         for(let k = 0; k < chunkSize; k++) {
-            const index = i*chunkSize + k;
+            const index = i*(chunkSize + 1) + k;
             const v0 = vertices[index];
             const v1 = vertices[index + 1];
-            const v2 = vertices[index + chunkSize];
-            const v3 = vertices[index + chunkSize + 1]
+            const v2 = vertices[index + chunkSize + 1];
+            const v3 = vertices[index + chunkSize + 2];
             generateUnit(v0, v1, v2, v3, meshVertices, normals, colors, itemCount);
             itemCount += itemSizePerUnit;
         }
@@ -118,15 +120,31 @@ function buildChunkMesh(mesh) {
 // Add unit made up of two faces to mesh
 function generateUnit(v0, v1, v2, v3, meshVertices, meshNormals, meshColors, itemCount) {
 
-    const vertices = new Float32Array([v0,v1,v2,v1,v3,v2]);
+    const vertices = new Float32Array([
+      v0.x, v0.y, v0.z,
+      v1.x, v1.y, v1.z,
+      v2.x, v2.y, v2.z,
 
-    const normals = new Float32Array([
-        calculateNormal(v0,v1,v2),
-        calculateNormal(v1,v3,v2)
+      v1.x, v1.y, v1.z,
+      v3.x, v3.y, v3.z,
+      v2.x, v2.y, v2.z
     ]);
 
-    for(var i = itemCount; i < itemCount + itemSizePerBlock; i++) {
-        meshColors.set([Math.random()],i);
+    const n1 = calculateNormal(v0,v1,v2);
+    const n2 = calculateNormal(v1,v3,v2);
+
+    const normals = new Float32Array([
+      n1.x, n1.y, n1.z,
+      n1.x, n1.y, n1.z,
+      n1.x, n1.y, n1.z,
+
+      n2.x, n2.y, n2.z,
+      n2.x, n2.y, n2.z,
+      n2.x, n2.y, n2.z
+    ]);
+
+    for(var i = itemCount; i < itemCount + itemSizePerUnit; i++) {
+        meshColors.set([0.5],i);
     }
     
     meshVertices.set(vertices, itemCount);
@@ -138,36 +156,31 @@ function generateUnit(v0, v1, v2, v3, meshVertices, meshNormals, meshColors, ite
   }
 
   function subtractVectors(v0, v1) {
-    return THREE.Vector3(v0.x - v1.x, v0.y - v1.y, v0.z - v1.z);
+    return new THREE.Vector3(v0.x - v1.x, v0.y - v1.y, v0.z - v1.z);
   }
 
   function vectorCrossProduct(v0, v1) {
-    return THREE.Vector3(v0.y * v1.z - v1.y * v0.z, v1.x * v0.z - v0.x * v1.z, v0.x * v1.y - v1.x * v0.y);
+    return new THREE.Vector3(v0.y * v1.z - v1.y * v0.z, v1.x * v0.z - v0.x * v1.z, v0.x * v1.y - v1.x * v0.y);
   }
 
   // if chunk is too far from player, move the chunk closer and regen
   function chunkloader() {
     chunkPool.forEach(chunk => {
     const threshold = (chunkSize * numberChunksXZ) / 2.0;
-    const vertThreshold = (chunkSize * numberChunksY) * 4;
     
     if(camera.position.x - chunk.position.x > threshold) {
         chunk.position.set(chunk.position.x + chunkSize * numberChunksXZ, chunk.position.y, chunk.position.z);
-        chunkReferencePos.x++;
         buildChunkMesh(chunk);
     } else if(camera.position.x - chunk.position.x < -threshold) {
         chunk.position.set(chunk.position.x - chunkSize * numberChunksXZ, chunk.position.y, chunk.position.z);
-        chunkReferencePos.x--;
         buildChunkMesh(chunk);
     }
 
     if(camera.position.z - chunk.position.z > threshold) {
         chunk.position.set(chunk.position.x, chunk.position.y, chunk.position.z + chunkSize * numberChunksXZ);
-        chunkReferencePos.z++;
         buildChunkMesh(chunk);
     } else if(camera.position.z - chunk.position.z < -threshold) {
         chunk.position.set(chunk.position.x, chunk.position.y, chunk.position.z - chunkSize * numberChunksXZ);
-        chunkReferencePos.z--;
         buildChunkMesh(chunk);
     }
     });

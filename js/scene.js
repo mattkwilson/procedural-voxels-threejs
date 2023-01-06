@@ -1,7 +1,7 @@
 // ----------------------------------------------------------
 // Created by Matthew Wilson
 // Created for UBC CPSC 314, September 2022, Assignment 1 
-// Updated 2023-01-05 with triangular terrain
+// Updated 2023-01-05 with triangular terrain and gui
 // ----------------------------------------------------------
 
 // ----------------------SCENE SETUP-------------------------
@@ -48,13 +48,13 @@ gui.onFinishChange((event) => {
   }
 });
 
-
 function ReGenerateTerrain() {
   clearChunks();
   generateChunks(0,0);
 }
 
 camera.position.set(0,terrainData.scale,0);
+
 // -----------------------MATERIALS--------------------------
 
 const blockMaterial = new THREE.MeshLambertMaterial({vertexColors:true});
@@ -66,7 +66,6 @@ const verticesPerFace = 3;
 const numDimensions = 3;
 const itemSizePerUnit = facesPerUnit * verticesPerFace * numDimensions;
 
-// terrain info
 const noise = new perlinNoise3d();
 
 var chunkPool = [];

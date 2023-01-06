@@ -9,7 +9,7 @@
 const scene = new THREE.Scene();
 const renderer = new THREE.WebGLRenderer();
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setClearColor(0x000000);
+renderer.setClearColor(0xb3e6e4);
 document.body.appendChild(renderer.domElement);
 
 const aspect = window.innerWidth / window.innerHeight;
@@ -20,8 +20,6 @@ const ambientLight = new THREE.AmbientLight(0x4a4a4a);
 scene.add(ambientLight);
 const light = new THREE.PointLight(0xffffff);
 scene.add(light);
-
-scene.add(new THREE.AxesHelper(3));
 
 // -----------------------MATERIALS--------------------------
 
@@ -36,9 +34,9 @@ const itemSizePerUnit = facesPerUnit * verticesPerFace * numDimensions;
 
 // terrain info
 const noise = new perlinNoise3d();
-const chunkSize = 5; // in square units
+const chunkSize = 10; // in square units
 // don't set these values too large or performance will drop greatly 
-const numberChunksXZ = 5;
+const numberChunksXZ = 10;
 const worldReferencePos = new THREE.Vector3(-10,0,-10);
 
 // PROCEDURAL GENERATION PROPERTIES
@@ -143,8 +141,10 @@ function generateUnit(v0, v1, v2, v3, meshVertices, meshNormals, meshColors, ite
       n2.x, n2.y, n2.z
     ]);
 
-    for(var i = itemCount; i < itemCount + itemSizePerUnit; i++) {
-        meshColors.set([0.5],i);
+    for(var i = itemCount; i < itemCount + itemSizePerUnit; i += 3) {
+        meshColors.set([0.45],i);
+        meshColors.set([0.6],i + 1);
+        meshColors.set([0.15],i + 2);
     }
     
     meshVertices.set(vertices, itemCount);
@@ -210,7 +210,7 @@ document.addEventListener('click', () => {
 var clock = new THREE.Clock();
 
 function inputHandler() {
-    const speed = 5;
+    const speed = 10;
     var delta = clock.getDelta();
 
     // handle flying WASD/EQ

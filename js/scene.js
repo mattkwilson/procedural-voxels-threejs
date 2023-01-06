@@ -1,6 +1,7 @@
 // ----------------------------------------------------------
 // Created by Matthew Wilson
 // Created for UBC CPSC 314, September 2022, Assignment 1 
+// Updated 2023-01-05 with triangular terrain and gui
 // ----------------------------------------------------------
 
 // ----------------------SCENE SETUP-------------------------
@@ -8,17 +9,51 @@
 const scene = new THREE.Scene();
 const renderer = new THREE.WebGLRenderer();
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setClearColor(0x000000);
+renderer.setClearColor(0xb3e6e4);
 document.body.appendChild(renderer.domElement);
 
 const aspect = window.innerWidth / window.innerHeight;
-const camera = new THREE.PerspectiveCamera(80, aspect, 0.1, 100);
-camera.position.set(0,12,0);
+const camera = new THREE.PerspectiveCamera(70, aspect, 0.1, 1000);
 
 const ambientLight = new THREE.AmbientLight(0x4a4a4a);
 scene.add(ambientLight);
 const light = new THREE.PointLight(0xffffff);
 scene.add(light);
+
+// --------------------------GUI-----------------------------
+const gui = new lil.GUI();
+
+// PROCEDURAL GENERATION PROPERTIES
+// -- play with these values to switch up the terrain that is generated
+// -- lowering the scale can help improve performance
+const terrainData = { 
+  playerSpeed: 10,
+  chunkSize: 10,
+  mapSize: 15,
+  scale: 50.0,
+  smoothness: 50.0,
+  seed: Math.random() * 1000000
+};
+// --------------------
+gui.add(terrainData, 'playerSpeed', 0, 30);
+gui.add(terrainData, 'chunkSize', 0, 20, 2);
+gui.add(terrainData, 'mapSize', 0, 50);
+gui.add(terrainData, 'scale', 0, 100);
+gui.add(terrainData, 'smoothness', 0, 100);
+gui.add(terrainData, 'seed');
+
+gui.onFinishChange((event) => {
+  if (event.property != 'playerSpeed') {
+    ReGenerateTerrain();
+  }
+});
+
+function ReGenerateTerrain() {
+  clearChunks();
+  generateChunks(0,0);
+}
+
+camera.position.set(0,terrainData.scale,0);
 
 // -----------------------MATERIALS--------------------------
 
@@ -26,278 +61,184 @@ const blockMaterial = new THREE.MeshLambertMaterial({vertexColors:true});
 
 // --------------PROCEDURAL VOXEL GENERATION-----------------
 // mesh info
-const verticesPerBlock = 36;
+const facesPerUnit = 2;
+const verticesPerFace = 3;
 const numDimensions = 3;
-const itemSizePerBlock = verticesPerBlock * numDimensions;
+const itemSizePerUnit = facesPerUnit * verticesPerFace * numDimensions;
 
-// terrain info
 const noise = new perlinNoise3d();
-const chunkSize = 5; // in blocks
-// don't set these values too large or performance will drop greatly 
-const numberChunksXZ = 5;
-const numberChunksY = 2;
-const worldReferencePos = new THREE.Vector3(-10,0,-10);
 
-// PROCEDURAL GENERATION PROPERTIES
-// -- play with these values to switch up the terrain that is generated
-// -- lower the scale can help improve performance
-const scale = 8;
-const smoothness = 8;
-// --------------------
+var chunkPool = [];
 
-const chunkPool = [];
-var chunkReferencePos = new THREE.Vector3(0,0,0);
+generateChunks(0, 0);
 
 // Generate the chunks
-for(let i = 0; i < numberChunksXZ; i++) {
-  for(let j = 0; j < numberChunksY; j++) {
-    for(let k = 0; k < numberChunksXZ; k++) {
-      var chunk = generateChunk(i * chunkSize,j * chunkSize, k * chunkSize);
-      scene.add(chunk);
-      chunkPool.push(chunk);
-    }
+function generateChunks(x, z) {
+  for(let i = 0; i < terrainData.mapSize; i++) {
+      for(let k = 0; k < terrainData.mapSize; k++) {
+        var chunk = generateChunk(x + i * terrainData.chunkSize, z + k * terrainData.chunkSize);
+        scene.add(chunk);
+        chunkPool.push(chunk);
+      }
   }
 }
 
+function clearChunks() {
+  chunkPool.forEach((mesh) => {
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+    scene.remove(mesh);
+  });
+  chunkPool = [];
+}
+
 // Generate a chunk
-function generateChunk(x,y,z) {
+function generateChunk(x,z) {
     var geometry = new THREE.BufferGeometry();
     var mesh = new THREE.Mesh(geometry, blockMaterial);
-    mesh.position.set(x + worldReferencePos.x, y + worldReferencePos.y, z + worldReferencePos.z); 
+    mesh.position.set(x, 0, z); 
     buildChunkMesh(mesh);
     return mesh;
   }
 
 // Create the mesh for a chunk
 function buildChunkMesh(mesh) {
-    const numBlocks = chunkSize * chunkSize * chunkSize;
-    const maxItemSize =  numBlocks * itemSizePerBlock;
-    const vertices = new Float32Array(maxItemSize);
+    const numUnits = terrainData.chunkSize * terrainData.chunkSize;
+    const maxItemSize =  numUnits * itemSizePerUnit;
+    const meshVertices = new Float32Array(maxItemSize);
     const normals = new Float32Array(maxItemSize);
     const colors = new Float32Array(maxItemSize);
     
-    var x = chunkReferencePos.x + mesh.position.x;
-    var y = chunkReferencePos.y + mesh.position.y;
-    var z = chunkReferencePos.z + mesh.position.z;
+    var x = mesh.position.x;
+    var z = mesh.position.z;
     
-    var itemCount = 0;
-    // Use perlin noise to determine where to place blocks
-    for(let i = 0; i < chunkSize; i++) {
-      for(let k = 0; k < chunkSize; k++) {
-        var height = getNoise(x + i,0, z + k, smoothness / 4.0, scale / 4.0);
-        height += getNoise(x + i,0, z + k, smoothness / 2.0, scale / 2.0);
-        height += getNoise(x + i,0, z + k, smoothness, scale);
-        for(let j = 0; j < chunkSize; j++) {
-          if(y + j <= height) { 
-            generateBlock(i,j,k, vertices, normals, colors, itemCount);
-            itemCount += itemSizePerBlock;
-          }
-        }
+    const vertices = []; // [numUnits + terrainData.chunkSize * 2 + 1]
+    // Use perlin noise to generate vertex positions
+    for(let i = 0; i <= terrainData.chunkSize; i++) {
+      for(let k = 0; k <= terrainData.chunkSize; k++) {
+        vertices.push(new THREE.Vector3(i, getTerrainHeight(x + i, z + k), k));
       }
     }
-    mesh.geometry.setAttribute('position', new THREE.BufferAttribute(vertices.subarray(0, itemCount), numDimensions));
+
+    // Build the faces for each unit
+    var itemCount = 0;
+    for(let i = 0; i < terrainData.chunkSize; i++) {
+        for(let k = 0; k < terrainData.chunkSize; k++) {
+            const index = i*(terrainData.chunkSize + 1) + k;
+            const v0 = vertices[index];
+            const v1 = vertices[index + 1];
+            const v2 = vertices[index + terrainData.chunkSize + 1];
+            const v3 = vertices[index + terrainData.chunkSize + 2];
+            generateUnit(v0, v1, v2, v3, mesh.position, meshVertices, normals, colors, itemCount);
+            itemCount += itemSizePerUnit;
+        }
+      }
+
+    mesh.geometry.setAttribute('position', new THREE.BufferAttribute(meshVertices.subarray(0, itemCount), numDimensions));
     mesh.geometry.setAttribute('normal', new THREE.BufferAttribute(normals.subarray(0, itemCount), numDimensions));
     mesh.geometry.setAttribute('color', new THREE.BufferAttribute(colors.subarray(0, itemCount), numDimensions));
+  }
+
+  function getTerrainHeight(x, z) {
+    var height = getNoise(x, 0, z, terrainData.smoothness, terrainData.scale, terrainData.seed); 
+    return height;
   }
 
   // 3D Perlin Noise value
   // smooth - controls variability of output (higher -> smoother terrain)
   // scale - controls size of output (higher -> larger scale terrain)
-  function getNoise(x, y, z, smooth = 1, scale = 1) {
-    return noise.get(x / smooth, y / smooth, z / smooth) * scale;
+  function getNoise(x, y, z, smooth = 1, scale = 1, seed = 0) {
+    return noise.get((x + seed) / smooth, (y + seed) / smooth, (z + seed) / smooth) * scale;
   }
 
-// Add block to mesh
-// TODO: optimize by only generating visible faces
-function generateBlock(x, y, z, meshVertices, meshNormals, meshColors, itemCount) {
-    // v0 = x,y,z
-    // v1 = x+1,y,z
-    // v2 = x,y,z+1
-    // v3 = x+1,y,z+1
-    // v4 = x,y+1,z
-    // v5 = x+1,y+1,z
-    // v6 = x,y+1,z+1
-    // v7 = x+1,y+1,z+1
-
-    // Bottom Face 
-    // 0,1,2
-    // 1,3,2
-
-    // Top Face
-    // 6,5,4
-    // 6,7,5
-
-    // Left Face
-    // 0,2,6
-    // 6,4,0
-
-    // Right Face
-    // 1,5,7
-    // 7,3,1
-
-    // Front Face
-    // 2,3,7
-    // 7,6,2
-
-    // Back Face
-    // 0,4,5
-    // 5,1,0
+// Add unit made up of two faces to mesh
+function generateUnit(v0, v1, v2, v3, meshPosition, meshVertices, meshNormals, meshColors, itemCount) {
 
     const vertices = new Float32Array([
-        // Bottom Face
-        x,y,z,
-        x+1,y,z,
-        x,y,z+1,
+      v0.x, v0.y, v0.z,
+      v1.x, v1.y, v1.z,
+      v2.x, v2.y, v2.z,
 
-        x+1,y,z,
-        x+1,y,z+1,
-        x,y,z+1,
-
-        // Top Face
-        x,y+1,z+1,
-        x+1,y+1,z,
-        x,y+1,z,
-
-        x,y+1,z+1,
-        x+1,y+1,z+1,
-        x+1,y+1,z,
-
-        // Left Face
-        x,y,z,
-        x,y,z+1,
-        x,y+1,z+1,
-
-        x,y+1,z+1,
-        x,y+1,z,
-        x,y,z,
-
-        // Right Face
-        x+1,y,z,
-        x+1,y+1,z,
-        x+1,y+1,z+1,
-
-        x+1,y+1,z+1,
-        x+1,y,z+1,
-        x+1,y,z,
-
-        // Front Face
-        x,y,z+1,
-        x+1,y,z+1,
-        x+1,y+1,z+1,
-
-        x+1,y+1,z+1,
-        x,y+1,z+1,
-        x,y,z+1,
-
-        // Back Face
-        x,y,z,
-        x,y+1,z,
-        x+1,y+1,z,
-
-        x+1,y+1,z,
-        x+1,y,z,
-        x,y,z
+      v1.x, v1.y, v1.z,
+      v3.x, v3.y, v3.z,
+      v2.x, v2.y, v2.z
     ]);
+
+    const n1 = calculateNormal(v0,v1,v2);
+    const n2 = calculateNormal(v1,v3,v2);
 
     const normals = new Float32Array([
-        // Bottom Face
-        0,-1,0,
-        0,-1,0,
-        0,-1,0,
+      n1.x, n1.y, n1.z,
+      n1.x, n1.y, n1.z,
+      n1.x, n1.y, n1.z,
 
-        0,-1,0,
-        0,-1,0,
-        0,-1,0,
-
-        // Top Face
-        0,1,0,
-        0,1,0,
-        0,1,0,
-
-        0,1,0,
-        0,1,0,
-        0,1,0,
-
-        // Left Face
-        -1,0,0,
-        -1,0,0,
-        -1,0,0,
-
-        -1,0,0,
-        -1,0,0,
-        -1,0,0,
-
-        // Right Face
-        1,0,0,
-        1,0,0,
-        1,0,0,
-
-        1,0,0,
-        1,0,0,
-        1,0,0,
-
-        // Front Face
-        0,0,1,
-        0,0,1,
-        0,0,1,
-
-        0,0,1,
-        0,0,1,
-        0,0,1,
-
-        // Back Face
-        0,0,-1,
-        0,0,-1,
-        0,0,-1,
-
-        0,0,-1,
-        0,0,-1,
-        0,0,-1
+      n2.x, n2.y, n2.z,
+      n2.x, n2.y, n2.z,
+      n2.x, n2.y, n2.z
     ]);
 
-    for(var i = itemCount; i < itemCount + itemSizePerBlock; i++) {
-        meshColors.set([Math.random()],i);
-    }
+    const colorV0 = calculateColor(v0, meshPosition);
+    const colorV1 = calculateColor(v1, meshPosition);
+    const colorV2 = calculateColor(v2, meshPosition);
+    const colorV3 = calculateColor(v3, meshPosition);
+
+    const colors = new Float32Array([
+      colorV0.r, colorV0.g, colorV0.b,
+      colorV1.r, colorV1.g, colorV1.b,
+      colorV2.r, colorV2.g, colorV2.b,
+
+      colorV1.r, colorV1.g, colorV1.b,
+      colorV3.r, colorV3.g, colorV3.b,
+      colorV2.r, colorV2.g, colorV2.b
+    ]);
     
     meshVertices.set(vertices, itemCount);
     meshNormals.set(normals, itemCount);
+    meshColors.set(colors, itemCount);
+  }
+
+  function calculateColor(v, meshPosition) {
+    const noise = getTerrainHeight(meshPosition.x + v.x, meshPosition.z + v.z);
+    const normalizedWeight = noise / terrainData.scale;
+
+    const mountainColor = new THREE.Color(0.6, 0.15, 0.45);
+    const groundColor = new THREE.Color(0.45, 0.6, 0.15);
+    
+    return groundColor.lerp(mountainColor, normalizedWeight);
+  }
+
+  function calculateNormal(v0, v1, v2) {
+    return vectorCrossProduct(subtractVectors(v1, v0), subtractVectors(v2, v0));
+  }
+
+  function subtractVectors(v0, v1) {
+    return new THREE.Vector3(v0.x - v1.x, v0.y - v1.y, v0.z - v1.z);
+  }
+
+  function vectorCrossProduct(v0, v1) {
+    return new THREE.Vector3(v0.y * v1.z - v1.y * v0.z, v1.x * v0.z - v0.x * v1.z, v0.x * v1.y - v1.x * v0.y);
   }
 
   // if chunk is too far from player, move the chunk closer and regen
   function chunkloader() {
     chunkPool.forEach(chunk => {
-    const threshold = (chunkSize * numberChunksXZ) / 2.0;
-    const vertThreshold = (chunkSize * numberChunksY) * 4;
+    const threshold = (terrainData.chunkSize * terrainData.mapSize) / 2.0;
     
     if(camera.position.x - chunk.position.x > threshold) {
-        chunk.position.set(chunk.position.x + chunkSize * numberChunksXZ, chunk.position.y, chunk.position.z);
-        chunkReferencePos.x++;
+        chunk.position.set(chunk.position.x + terrainData.chunkSize * terrainData.mapSize, chunk.position.y, chunk.position.z);
         buildChunkMesh(chunk);
     } else if(camera.position.x - chunk.position.x < -threshold) {
-        chunk.position.set(chunk.position.x - chunkSize * numberChunksXZ, chunk.position.y, chunk.position.z);
-        chunkReferencePos.x--;
+        chunk.position.set(chunk.position.x - terrainData.chunkSize * terrainData.mapSize, chunk.position.y, chunk.position.z);
         buildChunkMesh(chunk);
     }
 
     if(camera.position.z - chunk.position.z > threshold) {
-        chunk.position.set(chunk.position.x, chunk.position.y, chunk.position.z + chunkSize * numberChunksXZ);
-        chunkReferencePos.z++;
+        chunk.position.set(chunk.position.x, chunk.position.y, chunk.position.z + terrainData.chunkSize * terrainData.mapSize);
         buildChunkMesh(chunk);
     } else if(camera.position.z - chunk.position.z < -threshold) {
-        chunk.position.set(chunk.position.x, chunk.position.y, chunk.position.z - chunkSize * numberChunksXZ);
-        chunkReferencePos.z--;
+        chunk.position.set(chunk.position.x, chunk.position.y, chunk.position.z - terrainData.chunkSize * terrainData.mapSize);
         buildChunkMesh(chunk);
     }
-
-    // if(camera.position.y - (chunk.position.y + chunkSize / 2.0) > vertThreshold) {
-    //   chunk.position.set(chunk.position.x, chunk.position.y + chunkSize * numberChunksY, chunk.position.z);
-    //   chunkReferencePos.y++;
-    //   buildChunkMesh(chunk);
-    // } else if(camera.position.y - (chunk.position.y + chunkSize / 2.0) < -vertThreshold) {
-    //   chunk.position.set(chunk.position.x, chunk.position.y - chunkSize * numberChunksY, chunk.position.z);
-    //   chunkReferencePos.y--;
-    //   buildChunkMesh(chunk);
-    // }
     });
   }
 
@@ -318,14 +259,17 @@ function keyup(event) {
 const controls = new THREE.PointerLockControls(camera, document.body);
 
 // lock cursor to window
-document.addEventListener('click', () => {
-    controls.lock();
+document.addEventListener('click', (event) => {
+    // don't lock if user clicks the GUI
+    if (event.target.getAttribute('data-engine') == 'three.js r148') {
+      controls.lock();
+    } 
 });
   
 var clock = new THREE.Clock();
 
 function inputHandler() {
-    const speed = 5;
+    const speed = terrainData.playerSpeed;
     var delta = clock.getDelta();
 
     // handle flying WASD/EQ

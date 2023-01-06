@@ -1,6 +1,7 @@
 // ----------------------------------------------------------
 // Created by Matthew Wilson
 // Created for UBC CPSC 314, September 2022, Assignment 1 
+// Updated 2023-01-05 with triangular terrain
 // ----------------------------------------------------------
 
 // ----------------------SCENE SETUP-------------------------
@@ -26,16 +27,15 @@ const blockMaterial = new THREE.MeshLambertMaterial({vertexColors:true});
 
 // --------------PROCEDURAL VOXEL GENERATION-----------------
 // mesh info
-const verticesPerBlock = 36;
+const verticesPerUnit = 4;
 const numDimensions = 3;
-const itemSizePerBlock = verticesPerBlock * numDimensions;
+const itemSizePerUnit = verticesPerUnit * numDimensions;
 
 // terrain info
 const noise = new perlinNoise3d();
-const chunkSize = 5; // in blocks
+const chunkSize = 5; // in square units
 // don't set these values too large or performance will drop greatly 
 const numberChunksXZ = 5;
-const numberChunksY = 2;
 const worldReferencePos = new THREE.Vector3(-10,0,-10);
 
 // PROCEDURAL GENERATION PROPERTIES
@@ -50,52 +50,60 @@ var chunkReferencePos = new THREE.Vector3(0,0,0);
 
 // Generate the chunks
 for(let i = 0; i < numberChunksXZ; i++) {
-  for(let j = 0; j < numberChunksY; j++) {
     for(let k = 0; k < numberChunksXZ; k++) {
-      var chunk = generateChunk(i * chunkSize,j * chunkSize, k * chunkSize);
+      var chunk = generateChunk(i * chunkSize, k * chunkSize);
       scene.add(chunk);
       chunkPool.push(chunk);
     }
-  }
 }
 
 // Generate a chunk
-function generateChunk(x,y,z) {
+function generateChunk(x,z) {
     var geometry = new THREE.BufferGeometry();
     var mesh = new THREE.Mesh(geometry, blockMaterial);
-    mesh.position.set(x + worldReferencePos.x, y + worldReferencePos.y, z + worldReferencePos.z); 
+    mesh.position.set(x + worldReferencePos.x, 0, z + worldReferencePos.z); 
     buildChunkMesh(mesh);
     return mesh;
   }
 
 // Create the mesh for a chunk
 function buildChunkMesh(mesh) {
-    const numBlocks = chunkSize * chunkSize * chunkSize;
-    const maxItemSize =  numBlocks * itemSizePerBlock;
-    const vertices = new Float32Array(maxItemSize);
+    const numUnits = chunkSize * chunkSize;
+    const maxItemSize =  numUnits * itemSizePerUnit;
+    const meshVertices = new Float32Array(maxItemSize);
     const normals = new Float32Array(maxItemSize);
     const colors = new Float32Array(maxItemSize);
     
     var x = chunkReferencePos.x + mesh.position.x;
-    var y = chunkReferencePos.y + mesh.position.y;
+    var y = 0;
     var z = chunkReferencePos.z + mesh.position.z;
     
-    var itemCount = 0;
-    // Use perlin noise to determine where to place blocks
-    for(let i = 0; i < chunkSize; i++) {
-      for(let k = 0; k < chunkSize; k++) {
+    const vertices = new THREE.Vector3[numUnits + chunkSize * 2 + 1];
+    // Use perlin noise to generate vertex positions
+    for(let i = 0; i <= chunkSize; i++) {
+      for(let k = 0; k <= chunkSize; k++) {
         var height = getNoise(x + i,0, z + k, smoothness / 4.0, scale / 4.0);
         height += getNoise(x + i,0, z + k, smoothness / 2.0, scale / 2.0);
         height += getNoise(x + i,0, z + k, smoothness, scale);
-        for(let j = 0; j < chunkSize; j++) {
-          if(y + j <= height) { 
-            generateBlock(i,j,k, vertices, normals, colors, itemCount);
-            itemCount += itemSizePerBlock;
-          }
-        }
+        vertices.push(new THREE.Vector3(i, height, k));
       }
     }
-    mesh.geometry.setAttribute('position', new THREE.BufferAttribute(vertices.subarray(0, itemCount), numDimensions));
+
+    // Build the faces for each unit
+    var itemCount = 0;
+    for(let i = 0; i < chunkSize; i++) {
+        for(let k = 0; k < chunkSize; k++) {
+            const index = i*chunkSize + k;
+            const v0 = vertices[index];
+            const v1 = vertices[index + 1];
+            const v2 = vertices[index + chunkSize];
+            const v3 = vertices[index + chunkSize + 1]
+            generateUnit(v0, v1, v2, v3, meshVertices, normals, colors, itemCount);
+            itemCount += itemSizePerUnit;
+        }
+      }
+
+    mesh.geometry.setAttribute('position', new THREE.BufferAttribute(meshVertices.subarray(0, itemCount), numDimensions));
     mesh.geometry.setAttribute('normal', new THREE.BufferAttribute(normals.subarray(0, itemCount), numDimensions));
     mesh.geometry.setAttribute('color', new THREE.BufferAttribute(colors.subarray(0, itemCount), numDimensions));
   }
@@ -107,152 +115,14 @@ function buildChunkMesh(mesh) {
     return noise.get(x / smooth, y / smooth, z / smooth) * scale;
   }
 
-// Add block to mesh
-// TODO: optimize by only generating visible faces
-function generateBlock(x, y, z, meshVertices, meshNormals, meshColors, itemCount) {
-    // v0 = x,y,z
-    // v1 = x+1,y,z
-    // v2 = x,y,z+1
-    // v3 = x+1,y,z+1
-    // v4 = x,y+1,z
-    // v5 = x+1,y+1,z
-    // v6 = x,y+1,z+1
-    // v7 = x+1,y+1,z+1
+// Add unit made up of two faces to mesh
+function generateUnit(v0, v1, v2, v3, meshVertices, meshNormals, meshColors, itemCount) {
 
-    // Bottom Face 
-    // 0,1,2
-    // 1,3,2
-
-    // Top Face
-    // 6,5,4
-    // 6,7,5
-
-    // Left Face
-    // 0,2,6
-    // 6,4,0
-
-    // Right Face
-    // 1,5,7
-    // 7,3,1
-
-    // Front Face
-    // 2,3,7
-    // 7,6,2
-
-    // Back Face
-    // 0,4,5
-    // 5,1,0
-
-    const vertices = new Float32Array([
-        // Bottom Face
-        x,y,z,
-        x+1,y,z,
-        x,y,z+1,
-
-        x+1,y,z,
-        x+1,y,z+1,
-        x,y,z+1,
-
-        // Top Face
-        x,y+1,z+1,
-        x+1,y+1,z,
-        x,y+1,z,
-
-        x,y+1,z+1,
-        x+1,y+1,z+1,
-        x+1,y+1,z,
-
-        // Left Face
-        x,y,z,
-        x,y,z+1,
-        x,y+1,z+1,
-
-        x,y+1,z+1,
-        x,y+1,z,
-        x,y,z,
-
-        // Right Face
-        x+1,y,z,
-        x+1,y+1,z,
-        x+1,y+1,z+1,
-
-        x+1,y+1,z+1,
-        x+1,y,z+1,
-        x+1,y,z,
-
-        // Front Face
-        x,y,z+1,
-        x+1,y,z+1,
-        x+1,y+1,z+1,
-
-        x+1,y+1,z+1,
-        x,y+1,z+1,
-        x,y,z+1,
-
-        // Back Face
-        x,y,z,
-        x,y+1,z,
-        x+1,y+1,z,
-
-        x+1,y+1,z,
-        x+1,y,z,
-        x,y,z
-    ]);
+    const vertices = new Float32Array([v0,v1,v2,v1,v3,v2]);
 
     const normals = new Float32Array([
-        // Bottom Face
-        0,-1,0,
-        0,-1,0,
-        0,-1,0,
-
-        0,-1,0,
-        0,-1,0,
-        0,-1,0,
-
-        // Top Face
-        0,1,0,
-        0,1,0,
-        0,1,0,
-
-        0,1,0,
-        0,1,0,
-        0,1,0,
-
-        // Left Face
-        -1,0,0,
-        -1,0,0,
-        -1,0,0,
-
-        -1,0,0,
-        -1,0,0,
-        -1,0,0,
-
-        // Right Face
-        1,0,0,
-        1,0,0,
-        1,0,0,
-
-        1,0,0,
-        1,0,0,
-        1,0,0,
-
-        // Front Face
-        0,0,1,
-        0,0,1,
-        0,0,1,
-
-        0,0,1,
-        0,0,1,
-        0,0,1,
-
-        // Back Face
-        0,0,-1,
-        0,0,-1,
-        0,0,-1,
-
-        0,0,-1,
-        0,0,-1,
-        0,0,-1
+        calculateNormal(v0,v1,v2),
+        calculateNormal(v1,v3,v2)
     ]);
 
     for(var i = itemCount; i < itemCount + itemSizePerBlock; i++) {
@@ -261,6 +131,18 @@ function generateBlock(x, y, z, meshVertices, meshNormals, meshColors, itemCount
     
     meshVertices.set(vertices, itemCount);
     meshNormals.set(normals, itemCount);
+  }
+
+  function calculateNormal(v0, v1, v2) {
+    return vectorCrossProduct(subtractVectors(v1, v0), subtractVectors(v2, v0));
+  }
+
+  function subtractVectors(v0, v1) {
+    return THREE.Vector3(v0.x - v1.x, v0.y - v1.y, v0.z - v1.z);
+  }
+
+  function vectorCrossProduct(v0, v1) {
+    return THREE.Vector3(v0.y * v1.z - v1.y * v0.z, v1.x * v0.z - v0.x * v1.z, v0.x * v1.y - v1.x * v0.y);
   }
 
   // if chunk is too far from player, move the chunk closer and regen
@@ -288,16 +170,6 @@ function generateBlock(x, y, z, meshVertices, meshNormals, meshColors, itemCount
         chunkReferencePos.z--;
         buildChunkMesh(chunk);
     }
-
-    // if(camera.position.y - (chunk.position.y + chunkSize / 2.0) > vertThreshold) {
-    //   chunk.position.set(chunk.position.x, chunk.position.y + chunkSize * numberChunksY, chunk.position.z);
-    //   chunkReferencePos.y++;
-    //   buildChunkMesh(chunk);
-    // } else if(camera.position.y - (chunk.position.y + chunkSize / 2.0) < -vertThreshold) {
-    //   chunk.position.set(chunk.position.x, chunk.position.y - chunkSize * numberChunksY, chunk.position.z);
-    //   chunkReferencePos.y--;
-    //   buildChunkMesh(chunk);
-    // }
     });
   }
 
